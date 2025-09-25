@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Parachute Shooter — Detailed Canvas (PC)</title>
+<style>
+  :root{
+    --accent:#ff6b6b;
+    --panel:rgba(8,12,20,0.5);
+  }
+  html,body{height:100%;margin:0;background:#071021;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;color:#fff;overflow:hidden}
+  canvas#game{display:block;width:100%;height:100vh;background:linear-gradient(#9bd9ff,#4a86b8)}
+  .ui{position:fixed;left:12px;top:12px;background:var(--panel);padding:10px 12px;border-radius:10px;backdrop-filter:blur(6px);z-index:50}
+  .menu{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.76);padding:18px;border-radius:12px;text-align:center;z-index:60}
+  .menu h1{margin:0 0 8px 0;font-size:22px}
+  .btn{background:var(--accent);border:0;color:#fff;padding:8px 14px;margin:6px;border-radius:8px;cursor:pointer;font-weight:700}
+  .btn.alt{background:#2b9;color:#003}
+  .btn.small{background:#888;padding:6px 10px;border-radius:6px}
+  .shopPanel{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(6,10,20,0.96);padding:14px;border-radius:10px;z-index:70;width:820px;max-width:96%}
+  .shopGrid{display:flex;flex-wrap:wrap;gap:12px}
+  .card{flex:1 1 45%;background:linear-gradient(180deg,rgba(255,255,255,0.03),rgba(0,0,0,0.12));padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);box-sizing:border-box;display:flex;gap:8px;align-items:center}
+  .card .meta{flex:1}
+  .muted{color:rgba(255,255,255,0.85);font-size:13px}
+  .equipBadge{background:#ffd;color:#000;padding:4px 6px;border-radius:6px;font-weight:700}
+  @media (max-width:760px){ .card{flex-basis:100%} .shopPanel{width:94%} .menu{width:92%} }
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<div class="ui" id="hud">
+  <div>Điểm: <strong id="score">0</strong></div>
+  <div>Máu: <strong id="hp">100</strong></div>
+  <div>Vũ khí: <strong id="weaponName">Pistol</strong> <span id="equipBadge" class="equipBadge" style="display:none">EQUIPPED</span></div>
+  <div style="margin-top:6px;font-size:12px;color:rgba(255,255,255,0.85)">A/D: di chuyển • Space: rơi nhanh • Click: bắn • R: nạp</div>
+</div>
+
+<div id="menu" class="menu">
+  <h1>Parachute Shooter</h1>
+  <p style="margin:6px 0 12px 0;color:#dfefff">Canvas đồ họa chibi — Shop nhiều súng — Máy bay thả crate hồi máu</p>
+  <div>
+    <button id="startBtn" class="btn">Start</button>
+    <button id="shopBtn" class="btn alt">Shop</button>
+    <button id="resetBtn" class="btn small">Reset</button>
+  </div>
+  <p style="margin-top:8px;font-size:13px;color:#cfe">Mẹo: mua súng mạnh hơn để dễ hạ kẻ địch, crate hồi +20HP khi nhặt.</p>
+</div>
+
+<!-- Shop Panel -->
+<div id="shopPanel" class="shopPanel" style="display:none">
+  <h3 style="margin:0 0 8px 0">Shop — Weapons</h3>
+  <div style="margin-bottom:8px;color:rgba(255,255,255,0.9)">Điểm hiện có: <strong id="shopPoints">0</strong></div>
+  <div id="shopGrid" class="shopGrid"></div>
+  <div style="text-align:right;margin-top:10px"><button id="closeShop" class="btn small">Close</button></div>
+</div>
+
+<script>
+/* Parachute Shooter — Detailed Canvas (PC)
+   - Cartoon/chibi graphics drawn on canvas
+   - Shop with many weapons + icons (drawn with small canvas)
+   - Supply plane drops crate -> crate heals +20HP when picked
+   - Saves purchases/equipped/points in localStorage
+   - PC only (mouse + keyboard)
+*/
+
+(() => {
+  // --- Canvas setup ---
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  let W = canvas.width = innerWidth;
+  let H = canvas.height = innerHeight;
+  addEventListener('resize', ()=>{ W = canvas.width = innerWidth; H = canvas.height = innerHeight; });
+
+  // --- UI elements ---
+  const menu = document.getElementById('menu');
+  const startBtn = document.getElementById('startBtn');
+  const shopBtn = document.getElementById('shopBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const shopPanel = document.getElementById('shopPanel');
+  const shopGrid = document.getElementById('shopGrid');
+  const closeShop = document.getElementById('closeShop');
+  const scoreEl = document.getElementById('score');
+  const hpEl = document.getElementById('hp');
+  const weaponNameEl = document.getElementById('weaponName');
+  const equipBadge = document.getElementById('equipBadge');
+  const shopPointsEl = document.getElementById('shopPoints');
+
+  // --- Weapons (extended) ---
+  const WEAPONS = [
+    { id:'pistol', name:'Pistol', price:0, damage:12, fireRate:200, desc:'Starter: cân bằng, dễ dùng.' },
+    { id:'smg', name:'SMG', price:60, damage:16, fireRate:80, desc:'Tốc bắn cao, tầm ngắn.' },
+    { id:'rifle', name:'Rifle', price:140, damage:30, fireRate:260, desc:'Sát thương mạnh, chính xác.' },
+    { id:'sniper', name:'Sniper', price:320, damage:80, fireRate:900, desc:'Một phát chí mạng.' },
+    { id:'shotgun', name:'Shotgun', price:180, damage:48, fireRate:420, desc:'Đa viên, tầm ngắn.' },
+    { id:'lmg', name:'LMG', price:400, damage:22, fireRate:90, desc:'Sát thương ổn, mag lớn.' },
+    { id:'rocket', name:'Rocket', price:600, damage:140, fireRate:1200, desc:'Sát thương diện rộng.' }
+  ];
+
+  // --- persistence keys ---
+  const LS_PUR = 'ps_purchases_v4';
+  const LS_EQ = 'ps_equipped_v4';
+  const LS_POINTS = 'ps_points_v4';
+
+  // load persisted state
+  let purchases = JSON.parse(localStorage.getItem(LS_PUR) || 'null');
+  if(!purchases){ purchases = {}; WEAPONS.forEach(w=>{ if(w.price===0) purchases[w.id] = true; }); }
+  let equipped = localStorage.getItem(LS_EQ) || 'pistol';
+  let points = parseInt(localStorage.getItem(LS_POINTS) || '0', 10) || 0;
+
+  // game state
+  let running = false;
+  let player = null;
+  let enemies = [];
+  let bullets = [];
+  let eBullets = [];
+  let particles = [];
+  let clouds = [];
+  let crates = [];
+  let planes = [];
+  let lastFrame = 0;
+  let lastShot = 0;
+
+  // input
+  const mouse = { x: W/2, y: H/2, down: false };
+  const keys = {};
+  addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+  addEventListener('mousedown', e => { if(e.button === 0) mouse.down = true; });
+  addEventListener('mouseup', e => { if(e.button === 0) mouse.down = false; });
+  addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if(e.key === ' ' && player) player.vy += 6; });
+  addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  // helpers
+  const rand = (a,b) => Math.random()*(b-a)+a;
+  const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+  const findWeapon = id => WEAPONS.find(w=>w.id===id) || WEAPONS[0];
+  const saveState = ()=>{ localStorage.setItem(LS_PUR, JSON.stringify(purchases)); localStorage.setItem(LS_EQ, equipped); localStorage.setItem(LS_POINTS, String(points)); };
+
+  // drawing helpers
+  function roundRect(x,y,w,h,r,fillStyle){ ctx.beginPath(); const k=Math.min(r,w/2,h/2); ctx.moveTo(x+k,y); ctx.arcTo(x+w,y,x+w,y+h,k); ctx.arcTo(x+w,y+h,x,y+h,k); ctx.arcTo(x,y+h,x,y,k); ctx.arcTo(x,y,x+w,y,k); ctx.closePath(); ctx.fillStyle = fillStyle; ctx.fill(); }
+  function drawShadow(fn){ ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = 8; fn(); ctx.restore(); }
+
+  // --- Entities (cartoon) ---
+  class Player {
+    constructor(){
+      this.x = W*0.5; this.y = -120; this.vx = 0; this.vy = 0;
+      this.w = 34; this.h = 44; this.hp = 100; this.onGround = false;
+      this.parachuteOpen = true; this.cooldown = 0; this.reloading = false;
+      this.maxAmmo = 30; this.ammo = 30; this.reloadTime = 1200;
+    }
+    draw(ts){
+      // parachute
+      if(this.parachuteOpen){
+        const sway = Math.sin(ts*0.002 + this.x*0.01)*8;
+        ctx.save(); ctx.translate(this.x + sway, this.y - 4);
+        // canopy
+        ctx.beginPath(); ctx.moveTo(-84,-28); ctx.quadraticCurveTo(0,-110 + Math.sin(ts*0.002)*6, 84,-28);
+        const g = ctx.createLinearGradient(0,-110,0,-20); g.addColorStop(0,'#ff7b9a'); g.addColorStop(1,'#ffb3d0');
+        ctx.fillStyle = g; ctx.fill();
+        // cords
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(-36,-6); ctx.lineTo(-52,-26); ctx.moveTo(36,-6); ctx.lineTo(52,-26); ctx.stroke();
+        ctx.restore();
+      } else {
+        // pack
+        roundRect(this.x-12,this.y-28,24,14,4,'#7b4f3d');
+      }
+      // body
+      roundRect(this.x-16, this.y, 32, 36, 6, '#222');
+      // head
+      ctx.beginPath(); ctx.arc(this.x, this.y - 8, 11, 0, Math.PI*2); ctx.fillStyle = '#ffd28a'; ctx.fill();
+      // goggles
+      ctx.fillStyle = '#fff'; ctx.fillRect(this.x-9, this.y-11, 18, 6);
+      ctx.fillStyle = '#05111a'; ctx.fillRect(this.x-8, this.y-10, 6, 4); ctx.fillRect(this.x+2, this.y-10, 6, 4);
+      // gun
+      const ang = Math.atan2(mouse.y - this.y, mouse.x - this.x);
+      ctx.save(); ctx.translate(this.x+8, this.y+6); ctx.rotate(ang*0.95);
+      roundRect(0,-6,30,12,3,'#2b2b2b'); ctx.fillStyle = '#0e0e0e'; ctx.fillRect(28,-3,10,6);
+      ctx.restore();
+      // legs
+      roundRect(this.x-14,this.y+34,10,12,4,'#2b2b2b'); roundRect(this.x+4,this.y+34,10,12,4,'#2b2b2b');
+      // hp bar above hud updated separately
+    }
+    update(dt){
+      if(this.cooldown > 0) this.cooldown -= dt;
+      if(!this.onGround){
+        if(this.parachuteOpen){
+          this.vy += 0.06 * dt/16;
+          const dx = (mouse.x - this.x) * 0.0007 * dt;
+          this.vx += dx; this.vx *= 0.993; this.vy = clamp(this.vy, -10, 6);
+        } else {
+          this.vy += 0.18 * dt/16; this.vy = clamp(this.vy, -16, 14);
+        }
+        this.x += this.vx; this.y += this.vy;
+        if(this.y + this.h/2 >= H - 48){
+          this.onGround = true; this.parachuteOpen = false;
+          this.y = H - 48 - this.h/2; this.vx = this.vy = 0;
+          spawnParticles(this.x, this.y + this.h/2 - 6, '#a6d9a6', 10);
+        }
+      } else {
+        if(keys['a']||keys['arrowleft']) this.x -= 3.6;
+        if(keys['d']||keys['arrowright']) this.x += 3.6;
+        if((keys['w']||keys['arrowup'])) { this.vy = -6.6; this.onGround = false; this.parachuteOpen = false; }
+        this.x = clamp(this.x, 20, W-20);
+      }
+      if(this.y > H*0.6) this.parachuteOpen = false;
+    }
+    shoot(){
+      const w = findWeapon(equipped);
+      const now = performance.now();
+      if(now - lastShot < w.fireRate) return;
+      lastShot = now;
+      const ang = Math.atan2(mouse.y - this.y, mouse.x - this.x);
+      const px = this.x + Math.cos(ang)*24, py = this.y + Math.sin(ang)*8;
+      if(w.id === 'shotgun'){
+        const pellets = 7;
+        for(let i=0;i<pellets;i++){
+          const a = ang + rand(-0.35, 0.35);
+          bullets.push(new Bullet(px, py, Math.cos(a)*14, Math.sin(a)*14, Math.round(w.damage/3), true));
+        }
+      } else if(w.id === 'rocket'){
+        bullets.push(new Rocket(px, py, Math.cos(ang)*9, Math.sin(ang)*9, w.damage));
+      } else {
+        bullets.push(new Bullet(px, py, Math.cos(ang)*18, Math.sin(ang)*18, w.damage, true));
+      }
+      // muzzle particles
+      for(let i=0;i<6;i++) particles.push({ x:px, y:py, vx:Math.cos(ang)*0.6 + rand(-0.8,0.8), vy:Math.sin(ang)*0.6 + rand(-0.8,0.8), life:rand(220,420), size:rand(2,4), color:'#ffd98e' });
+    }
+  }
+
+  class Enemy {
+    constructor(x,y){
+      this.x = x; this.y = y; this.w = 38; this.h = 44;
+      this.vx = rand(-1.4, 1.4); this.vy = 0; this.hp = rand(30,70); this.cool = rand(700,1400);
+      this.parachuteOpen = true;
+    }
+    draw(ts){
+      if(this.parachuteOpen){
+        const sway = Math.sin((ts + this.x)*0.002)*6;
+        ctx.save(); ctx.translate(this.x + sway, this.y - 4);
+        ctx.beginPath(); ctx.moveTo(-54,-18); ctx.quadraticCurveTo(0, -60, 54, -18);
+        ctx.fillStyle = '#77c'; ctx.fill(); ctx.restore();
+      }
+      roundRect(this.x - this.w/2, this.y - this.h/2, this.w, this.h, 6, '#b34b4b');
+      ctx.beginPath(); ctx.arc(this.x, this.y - 10, 8, 0, Math.PI*2); ctx.fillStyle = '#f5d1b0'; ctx.fill();
+      const bw = 40; roundRect(this.x - bw/2, this.y - this.h/2 - 14, bw, 6, 3, 'rgba(0,0,0,0.6)');
+      roundRect(this.x - bw/2 + 2, this.y - this.h/2 - 12, (bw - 4) * clamp(this.hp/70, 0, 1), 2, 2, '#ff6b6b');
+    }
+    update(dt){
+      if(this.parachuteOpen){
+        this.vy += 0.03 * dt/16; this.y += this.vy; this.x += this.vx * dt/16;
+        if(this.y + this.h/2 >= H - 48 - rand(0,60)){ this.parachuteOpen = false; this.vx = rand(-0.6, 0.6); this.vy = 0; }
+      } else {
+        this.x += this.vx * dt/16;
+        this.cool -= dt;
+        if(this.cool <= 0){ this.cool = rand(900,1700); const ang = Math.atan2(player.y - this.y, player.x - this.x); eBullets.push(new Bullet(this.x, this.y, Math.cos(ang)*10, Math.sin(ang)*10, 9, false)); }
+      }
+      if(this.x < 20) this.x = 20; if(this.x > W-20) this.x = W-20;
+    }
+  }
+
+  class Bullet {
+    constructor(x,y,vx,vy,damage,fromPlayer){
+      this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.damage = damage; this.fromPlayer = fromPlayer;
+      this.life = 1200; this.trail = [];
+    }
+    update(dt){
+      this.trail.push({ x:this.x, y:this.y, t:140 });
+      if(this.trail.length > 10) this.trail.shift();
+      this.x += this.vx * dt/16; this.y += this.vy * dt/16; this.life -= dt;
+    }
+    draw(){
+      for(let i=0;i<this.trail.length;i++){
+        const t = this.trail[i]; const a = (i+1)/this.trail.length * 0.85;
+        ctx.globalAlpha = a; ctx.beginPath(); ctx.arc(t.x, t.y, 2 + (i/this.trail.length)*3, 0, Math.PI*2); ctx.fillStyle = '#fff'; ctx.fill();
+      }
+      ctx.globalAlpha = 1; ctx.beginPath(); ctx.arc(this.x, this.y, 4, 0, Math.PI*2); ctx.fillStyle = this.fromPlayer ? '#fff4cc' : '#ffea66'; ctx.fill();
+    }
+  }
+
+  class Rocket {
+    constructor(x,y,vx,vy,damage){ this.x = x; this.y = y; this.vx = vx; this.vy = vy; this.damage = damage; this.life = 2000; }
+    update(dt){ this.x += this.vx * dt/16; this.y += this.vy * dt/16; this.life -= dt; }
+    draw(){ ctx.beginPath(); ctx.arc(this.x, this.y, 6, 0, Math.PI*2); ctx.fillStyle = '#ffb5b5'; ctx.fill(); ctx.beginPath(); ctx.moveTo(this.x - this.vx*2, this.y - this.vy*2); ctx.lineTo(this.x, this.y); ctx.strokeStyle='rgba(255,180,180,0.9)'; ctx.lineWidth = 3; ctx.stroke(); }
+  }
+
+  // Crate & Plane
+  class Crate {
+    constructor(x,y){ this.x = x; this.y = y; this.vy = 1.2; this.w = 36; this.h = 28; this.picked = false; }
+    update(dt){ this.y += this.vy * dt/16; if(this.y + this.h/2 >= H - 48) this.vy = 0; }
+    draw(){
+      ctx.save(); ctx.translate(this.x, this.y);
+      roundRect(-this.w/2, -this.h/2, this.w, this.h, 6, '#8b5e3c');
+      // red cross
+      ctx.fillStyle = '#fff'; ctx.fillRect(-6, -8, 12, 12);
+      ctx.fillStyle = '#d33'; ctx.fillRect(-4, -6, 8, 8);
+      ctx.restore();
+    }
+  }
+
+  class SupplyPlane {
+    constructor(){ this.x = -160; this.y = rand(60, 120); this.vx = rand(1.6, 3.2); this.dropTimer = rand(1200, 3000); }
+    update(dt){
+      this.x += this.vx * dt/16; this.dropTimer -= dt;
+      if(this.dropTimer <= 0){ this.dropTimer = 999999; crates.push(new Crate(this.x, this.y + 20)); }
+      if(this.x > W + 120) this.x = -220; // loop gracefully
+    }
+    draw(){
+      // cute plane: body + wings + cockpit
+      ctx.save(); ctx.translate(this.x, this.y);
+      roundRect(-28, -8, 56, 18, 6, '#445');
+      ctx.fillStyle = '#bde'; ctx.fillRect(-8, -6, 16, 12);
+      // simple tail
+      ctx.beginPath(); ctx.moveTo(-28,0); ctx.lineTo(-36,6); ctx.lineTo(-28,6); ctx.fillStyle = '#445'; ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Particles
+  function spawnParticles(x,y,color,count=14){
+    for(let i=0;i<count;i++){
+      const a = rand(0, Math.PI*2), s = rand(1,5);
+      particles.push({ x, y, vx: Math.cos(a)*s, vy: Math.sin(a)*s, life: rand(300,900), size: rand(2,5), color });
+    }
+  }
+
+  // Clouds
+  for(let i=0;i<12;i++) clouds.push({ x: rand(0, W), y: rand(20, H*0.35), s: rand(0.6, 1.4), off: rand(0, 1000) });
+
+  // --- Spawn helpers ---
+  function spawnEnemyPeriod(){ if(!running) return; const x = rand(80, W-80); enemies.push(new Enemy(x, rand(60,140))); setTimeout(spawnEnemyPeriod, rand(1400, 3200)); }
+  function spawnPlanePeriod(){ if(!running) return; planes.push(new SupplyPlane()); setTimeout(spawnPlanePeriod, rand(10000, 22000)); }
+
+  // --- Update loop ---
+  function update(dt, ts){
+    if(!running) return;
+    player.update(dt);
+    // auto shoot while holding mouse
+    if(mouse.down) player.shoot();
+
+    // bullets
+    for(let i=bullets.length-1;i>=0;i--){
+      const b = bullets[i]; b.update(dt);
+      // player bullets hit enemies
+      if(b.fromPlayer){
+        for(let j=enemies.length-1;j>=0;j--){
+          const e = enemies[j];
+          if(b.x > e.x - e.w/2 && b.x < e.x + e.w/2 && b.y > e.y - e.h/2 && b.y < e.y + e.h/2){
+            e.hp -= b.damage; spawnParticles(b.x, b.y, '#ffd38a', 8); bullets.splice(i,1);
+            if(e.hp <= 0){ spawnParticles(e.x, e.y, '#ffb07a', 22); points += Math.round(12 + Math.random()*10); enemies.splice(j,1); saveState(); updateHUD(); }
+            break;
+          }
+        }
+      } else {
+        // enemy bullets hit player (handled in eBullets)
+      }
+      if(b.life <= 0 || b.x < -50 || b.x > W + 50 || b.y < -50 || b.y > H + 50) bullets.splice(i,1);
+    }
+
+    // rockets area damage
+    for(let i=bullets.length-1;i>=0;i--){
+      const b = bullets[i];
+      if(b instanceof Rocket){
+        for(let j=enemies.length-1;j>=0;j--){
+          const e = enemies[j]; const dx = b.x - e.x, dy = b.y - e.y;
+          if(Math.sqrt(dx*dx + dy*dy) < 60){
+            spawnParticles(b.x, b.y, '#ffb07a', 30);
+            e.hp -= b.damage;
+            if(e.hp <= 0){ points += Math.round(20 + Math.random()*18); enemies.splice(j,1); saveState(); updateHUD(); }
+            bullets.splice(i,1); break;
+          }
+        }
+      }
+    }
+
+    // enemy bullets
+    for(let i=eBullets.length-1;i>=0;i--){
+      const b = eBullets[i]; b.update(dt);
+      if(b.x > player.x - player.w/2 && b.x < player.x + player.w/2 && b.y > player.y - player.h/2 && b.y < player.y + player.h/2){
+        spawnParticles(b.x, b.y, '#ff9b66', 6); player.hp -= b.damage || 9; eBullets.splice(i,1);
+        if(player.hp <= 0){ running = false; menu.style.display = 'block'; alert('Bạn đã chết! Điểm: ' + points); saveState(); updateHUD(); return; }
+      }
+      if(b.life <= 0) eBullets.splice(i,1);
+    }
+
+    // enemies
+    for(let i=enemies.length-1;i>=0;i--){ enemies[i].update(dt); if(enemies[i].x < -100 || enemies[i].x > W + 100) enemies.splice(i,1); }
+
+    // crates (pickup)
+    for(let i=crates.length-1;i>=0;i--){
+      const c = crates[i]; c.update(dt);
+      if(!c.picked && Math.abs(c.x - player.x) < 32 && Math.abs(c.y - player.y) < 40){
+        c.picked = true; player.hp = clamp(player.hp + 20, 0, 100); spawnParticles(c.x, c.y, '#9bf', 12); crates.splice(i,1); saveState(); updateHUD();
+      }
+      if(c.y > H + 120) crates.splice(i,1);
+    }
+
+    // planes
+    for(let i=planes.length-1;i>=0;i--){ const p = planes[i]; p.update(dt); if(p.x > W + 300) planes.splice(i,1); }
+
+    // particles
+    for(let i=particles.length-1;i>=0;i--){ const p = particles[i]; p.x += p.vx * dt/16; p.y += p.vy * dt/16; p.vy += 0.03 * dt/16; p.life -= dt; if(p.life <= 0) particles.splice(i,1); }
+
+    // clouds
+    clouds.forEach(c => { c.x = (c.x + 0.02 * c.s * dt) % (W + 300); });
+
+    updateHUD();
+  }
+
+  // --- Draw loop ---
+  function drawBackground(ts){
+    const g = ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#9bd9ff'); g.addColorStop(0.55,'#77b9e6'); g.addColorStop(1,'#3a7fb3'); ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+    // sun
+    ctx.beginPath(); ctx.arc(W - 140, 80, 60, 0, Math.PI*2); ctx.fillStyle = 'rgba(255,235,160,0.85)'; ctx.fill();
+    // clouds
+    clouds.forEach(c => { const x = (c.x + c.off*0.02) % (W + 400) - 200; ctx.beginPath(); ctx.ellipse(x, c.y, 120*c.s, 44*c.s, 0, 0, Math.PI*2); ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.fill(); ctx.beginPath(); ctx.ellipse(x-8, c.y+8, 90*c.s, 34*c.s, 0,0,Math.PI*2); ctx.fillStyle='rgba(220,235,255,0.06)'; ctx.fill(); });
+    // mountains
+    for(let i=0;i<5;i++){ const mx = (i*(W/5) - (ts*0.02*(i+1))) % (W + 220) - 120; ctx.beginPath(); ctx.moveTo(mx-200, H*0.62+120); ctx.lineTo(mx+120, H*0.62 - (60 + i*10)); ctx.lineTo(mx+420, H*0.62+120); ctx.closePath(); ctx.fillStyle = `rgba(55,78,110,${0.6 - i*0.06})`; ctx.fill(); }
+    // ground / trees
+    ctx.fillStyle = '#1b7a4b'; ctx.fillRect(0, H - 48, W, 48);
+    for(let i=0;i<10;i++){ const tx = (i*(W/10) + (ts*0.03)) % (W+120) - 60; const th = 30 + (i%3)*10; ctx.fillStyle = '#4b2f1b'; ctx.fillRect(tx+8, H-48-th, 8, th); ctx.beginPath(); ctx.ellipse(tx+12, H-48-th-12, th*0.6, th*0.45, 0,0,Math.PI*2); ctx.fillStyle = '#07a34a'; ctx.fill(); }
+  }
+
+  function drawAll(ts){
+    drawBackground(ts);
+    // planes
+    planes.forEach(p => p.draw());
+    // crates behind enemies? draw crates slightly above ground
+    crates.forEach(c => c.draw());
+    // enemies
+    enemies.forEach(e => e.draw(ts));
+    // bullets
+    bullets.forEach(b => b.draw());
+    eBullets.forEach(b => b.draw());
+    // player
+    player.draw(ts);
+    // particles
+    particles.forEach(p=>{ ctx.globalAlpha = clamp(p.life/900,0,1); ctx.beginPath(); ctx.arc(p.x,p.y,p.size,0,Math.PI*2); ctx.fillStyle = p.color; ctx.fill(); ctx.globalAlpha = 1; });
+    // reticle
+    ctx.beginPath(); ctx.arc(mouse.x, mouse.y, 10, 0, Math.PI*2); ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(mouse.x-14, mouse.y); ctx.lineTo(mouse.x+14, mouse.y); ctx.moveTo(mouse.x, mouse.y-14); ctx.lineTo(mouse.x, mouse.y+14); ctx.stroke();
+  }
+
+  function loop(ts){
+    if(!lastFrame) lastFrame = ts;
+    const dt = ts - lastFrame;
+    lastFrame = ts;
+    update(dt, ts);
+    if(running){ ctx.clearRect(0,0,W,H); drawAll(ts); }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // --- HUD update ---
+  function updateHUD(){
+    scoreEl.textContent = points;
+    hpEl.textContent = Math.max(0, Math.round(player ? player.hp : 100));
+    weaponNameEl.textContent = findWeapon(equipped).name;
+    equipBadge.style.display = purchases[equipped] ? 'inline-block' : 'none';
+    shopPointsEl.textContent = points;
+  }
+
+  // --- Input handlers ---
+  canvas.addEventListener('click', e => {
+    if(!running) return;
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = e.clientX - rect.left; mouse.y = e.clientY - rect.top;
+    player.shoot();
+  });
+
+  // --- Start / Shop / Reset wiring ---
+  startBtn.addEventListener('click', ()=> {
+    if(!player) player = new Player();
+    running = true; menu.style.display = 'none'; shopPanel.style.display = 'none';
+    // reset world arrays (but keep points/purchases)
+    enemies.length = bullets.length = eBullets.length = particles.length = crates.length = planes.length = 0;
+    spawnEnemyPeriod(); spawnPlanePeriod(); saveState(); updateHUD();
+  });
+
+  shopBtn.addEventListener('click', ()=> { buildShop(); shopPanel.style.display = 'block'; menu.style.display = 'none'; });
+  closeShop.addEventListener('click', ()=> { shopPanel.style.display = 'none'; menu.style.display = 'block'; });
+
+  resetBtn.addEventListener('click', ()=>{
+    if(!confirm('Reset game? Xóa mua hàng và điểm.')) return;
+    purchases = {}; WEAPONS.forEach(w=>{ if(w.price===0) purchases[w.id]=true; });
+    equipped = 'pistol'; points = 0;
+    player = new Player(); enemies.length = bullets.length = eBullets.length = particles.length = crates.length = planes.length = 0;
+    saveState(); updateHUD(); alert('Đã reset.');
+  });
+
+  // --- Shop builder with small canvas icons ---
+  function makeIconCanvas(drawFn, size=56){
+    const c = document.createElement('canvas'); c.width = size; c.height = size;
+    const g = c.getContext('2d');
+    // transparent
+    g.clearRect(0,0,size,size);
+    drawFn(g, size);
+    return c;
+  }
+
+  function drawWeaponIcon(g, size, id){
+    // simple stylized weapon icons
+    g.save(); g.translate(size/2, size/2); g.scale(size/56, size/56);
+    if(id === 'pistol'){
+      g.fillStyle = '#2b2b2b'; g.fillRect(-6,-4,20,8); g.fillStyle='#111'; g.fillRect(12,-2,8,4);
+    } else if(id === 'smg'){
+      g.fillStyle='#2b2b2b'; g.fillRect(-16,-5,28,10); g.fillStyle='#111'; g.fillRect(-6,-9,6,4);
+    } else if(id === 'rifle'){
+      g.fillStyle='#2b2b2b'; g.fillRect(-20,-3,36,6); g.fillStyle='#776'; g.fillRect(-8,4,16,4);
+    } else if(id === 'sniper'){
+      g.fillStyle='#222'; g.fillRect(-22,-3,40,6); g.fillStyle='#444'; g.fillRect(4,-2,18,2);
+    } else if(id === 'shotgun'){
+      g.fillStyle='#2b2b2b'; for(let i=0;i<3;i++) g.fillRect(-12 + i*6, -4, 6, 8);
+    } else if(id === 'lmg'){
+      g.fillStyle='#2b2b2b'; g.fillRect(-20,-5,36,10); g.fillStyle='#334'; g.fillRect(-16,6,28,4);
+    } else if(id === 'rocket'){
+      g.fillStyle='#b33'; g.beginPath(); g.moveTo(-8,8); g.lineTo(8,8); g.lineTo(0,-12); g.closePath(); g.fill();
+    }
+    g.restore();
+  }
+
+  function buildShop(){
+    shopGrid.innerHTML = '';
+    WEAPONS.forEach(w => {
+      const card = document.createElement('div'); card.className = 'card';
+      const iconCanvas = makeIconCanvas((g,size)=> drawWeaponIcon(g,size,w.id), 56);
+      const meta = document.createElement('div'); meta.className = 'meta';
+      meta.innerHTML = `<div style="display:flex;align-items:center;gap:8px"><strong style="font-size:16px">${w.name}</strong><span style="color:#ddd;margin-left:6px">(${w.price})</span></div>
+        <div class="muted" style="margin-top:6px">${w.desc}</div>
+        <div class="muted" style="margin-top:8px">DMG: <strong>${w.damage}</strong> • FR: <strong>${w.fireRate}ms</strong></div>
+        <div style="margin-top:8px" id="actions_${w.id}"></div>`;
+      card.appendChild(iconCanvas); card.appendChild(meta);
+      shopGrid.appendChild(card);
+      const actions = meta.querySelector(`#actions_${w.id}`);
+      if(purchases[w.id]){
+        if(equipped === w.id){
+          actions.innerHTML = `<span class="equipBadge">Equipped</span>`;
+        } else {
+          const btn = document.createElement('button'); btn.className = 'small'; btn.innerText = 'Equip';
+          btn.onclick = ()=>{ equipped = w.id; saveState(); updateHUD(); buildShop(); };
+          actions.appendChild(btn);
+        }
+      } else {
+        const btn = document.createElement('button'); btn.className = 'small';
+        if(points >= w.price){
+          btn.innerText = `Buy (${w.price})`;
+          btn.onclick = ()=>{ points -= w.price; purchases[w.id] = true; equipped = w.id; saveState(); updateHUD(); buildShop(); };
+        } else {
+          btn.innerText = `Locked (${w.price})`; btn.disabled = true;
+        }
+        actions.appendChild(btn);
+      }
+    });
+    shopPointsEl.textContent = points;
+  }
+
+  // --- load persisted state ---
+  (function load(){
+    const p = JSON.parse(localStorage.getItem(LS_PUR) || 'null'); if(p) purchases = p;
+    const e = localStorage.getItem(LS_EQ); if(e) equipped = e;
+    const pts = parseInt(localStorage.getItem(LS_POINTS) || '0', 10); if(!isNaN(pts)) points = pts;
+  })();
+  updateHUD();
+
+  // --- spawn world helpers ---
+  function spawnEnemyPeriod(){ if(!running) return; enemies.push(new Enemy(rand(80, W-80), rand(60, 140))); setTimeout(spawnEnemyPeriod, rand(1400, 3200)); }
+  function spawnPlanePeriod(){ if(!running) return; planes.push(new SupplyPlane()); setTimeout(spawnPlanePeriod, rand(10000, 22000)); }
+
+  // --- save on exit ---
+  addEventListener('beforeunload', ()=> saveState());
+
+  // --- init player & HUD ---
+  player = new Player(); updateHUD();
+
+  // --- helper to update HUD elements ---
+  function updateHUD(){ scoreEl.textContent = points; hpEl.textContent = Math.max(0, Math.round(player ? player.hp : 100)); weaponNameEl.textContent = findWeapon(equipped).name; equipBadge.style.display = purchases[equipped] ? 'inline-block' : 'none'; shopPointsEl.textContent = points; }
+
+  // --- game loop start from menu click handled above ---
+
+  // --- Expose small convenience at dev console for testing (optional) ---
+  window._ps = { start: ()=> startBtn.click(), spawnEnemy: ()=> enemies.push(new Enemy(rand(80,W-80), rand(60,140))) };
+
+  // NOTE: loop already started above; everything driven by start button
+
+  // Because loop runs regardless, start timers when running toggles:
+  // (spawn functions called when start button pressed)
+
+})();
+</script>
+</body>
+</html>
